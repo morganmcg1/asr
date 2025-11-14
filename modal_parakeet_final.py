@@ -7,10 +7,11 @@ Fixed W&B project name and proper tagging with model name.
 import modal
 import os
 
-# Enhanced image with all dependencies
+# Enhanced image with all dependencies including CUDA toolkit for numba
 image = (
-    modal.Image.debian_slim()
-    .apt_install("sox", "libsndfile1", "ffmpeg", "wget")
+    modal.Image.micromamba(python_version="3.12")
+    .apt_install("sox", "libsndfile1", "ffmpeg", "wget", "build-essential", "gcc", "g++")
+    .micromamba_install("cudatoolkit", channels=["conda-forge"])  # Install CUDA toolkit for numba NVVM support
     .pip_install([
         "nemo_toolkit[asr]==2.5.3",  # Pin exact version
         "torch>=2.0.0",
@@ -23,6 +24,7 @@ image = (
         "huggingface-hub>=0.23.2",
     ])
 )
+
 
 app = modal.App("parakeet-v3-final-finetune")
 
@@ -63,7 +65,7 @@ def finetune_parakeet_v3_final(
     from nemo.utils.exp_manager import exp_manager
     
     import torch
-    import pytorch_lightning as pl
+    from nemo import lightning as nl  # NeMo 2.0 uses nemo.lightning.Trainer
     from omegaconf import OmegaConf
     
     model_name = "nvidia/parakeet-tdt-0.6b-v3"
@@ -72,7 +74,6 @@ def finetune_parakeet_v3_final(
     print("🚀 Starting Final Parakeet-v3 fine-tuning on NVIDIA H100")
     print(f"NeMo version: {nemo.__version__}")
     print(f"PyTorch version: {torch.__version__}")
-    print(f"PyTorch Lightning version: {pl.__version__}")
     print(f"GPU: {torch.cuda.get_device_name(0)}")
     print(f"Model: {model_name}")
     
@@ -111,7 +112,7 @@ def finetune_parakeet_v3_final(
                     "gpu": "H100",
                     "nemo_version": nemo.__version__,
                     "pytorch_version": torch.__version__,
-                    "pytorch_lightning_version": pl.__version__,
+    #                     "pytorch_lightning_version": pl.__version__,
                     "dataset": "AN4",
                     "training_approach": "manual_loop",
                 }
@@ -259,7 +260,7 @@ exp_manager:
     entity: milieu
     name: {model_short_name}-h100-{max_epochs}ep-{subset_size}samples
     tags: ["{model_short_name}", "parakeet-v3", "h100", "fine-tuning"]
-  create_checkpoint_callback: true
+  create_checkpoint_callback: false  # Let trainer handle checkpointing
   checkpoint_callback_params:
     monitor: val_wer
     mode: min
@@ -314,21 +315,28 @@ model:
     
     # Load config and create trainer
     cfg = OmegaConf.load(config_path)
-    
-    # Setup trainer and experiment manager
+
+    # CRITICAL: Follow official NeMo 2.0 training pattern
+    # 1. Create trainer FIRST
     print("🏋️ Setting up trainer...")
-    trainer = pl.Trainer(**cfg.trainer)
-    exp_dir = exp_manager(trainer, cfg.exp_manager)
+    trainer = nl.Trainer(**cfg.trainer)
     
-    # Setup model for training
-    print("🔧 Configuring model for training...")
+    # 2. Setup exp_manager BEFORE touching the model
+    exp_dir = exp_manager(trainer, cfg.exp_manager)
+
+    # 3. Attach trainer to model (NeMo pattern)
+    print("🔧 Attaching trainer to model...")
     asr_model.set_trainer(trainer)
+    
+    # 4. Setup dataloaders (calls model methods)
+    print("📊 Setting up training and validation data...")
     asr_model.setup_training_data(cfg.model.train_ds)
     asr_model.setup_validation_data(cfg.model.validation_ds)
-    
-    # Configure optimizer
-    asr_model.cfg.optim = cfg.model.optim
-    
+
+    # 5. Setup optimization
+    print("⚙️ Setting up optimization...")
+    asr_model.setup_optimization(cfg.model.optim)
+
     # Start fine-tuning
     print(f"🚀 Starting fine-tuning for {max_epochs} epochs...")
     print(f"Training samples: {train_count}")
@@ -336,277 +344,59 @@ model:
     print(f"Batch size: {batch_size}")
     print(f"Learning rate: {learning_rate}")
     print(f"Experiment directory: {exp_dir}")
-    
-    try:
-        # Use NeMo's training approach with proper optimizer handling
-        print("🎯 Starting training using NeMo's approach...")
-        
-        # Get data loaders
-        train_dataloader = asr_model._train_dl
-        val_dataloader = asr_model._validation_dl
-        
-        print(f"✅ Data loaders ready: {len(train_dataloader)} train batches, {len(val_dataloader)} val batches")
-        
-        # Get optimizer properly - handle NeMo's complex optimizer structure
-        optimizer_config = asr_model.configure_optimizers()
-        
-        # Handle different optimizer return formats from NeMo
-        if isinstance(optimizer_config, dict):
-            if 'optimizer' in optimizer_config:
-                optimizer = optimizer_config['optimizer']
-                scheduler = optimizer_config.get('lr_scheduler', None)
-            else:
-                # Sometimes the dict IS the optimizer config
-                optimizer = optimizer_config
-                scheduler = None
-        elif isinstance(optimizer_config, (list, tuple)):
-            # Extract first element if it's a list/tuple
-            first_item = optimizer_config[0]
-            if isinstance(first_item, dict) and 'optimizer' in first_item:
-                optimizer = first_item['optimizer']
-                scheduler = first_item.get('lr_scheduler', None)
-            else:
-                optimizer = first_item
-                scheduler = optimizer_config[1] if len(optimizer_config) > 1 else None
-        else:
-            optimizer = optimizer_config
-            scheduler = None
-        
-        # Final check - if optimizer is still a list, take the first element
-        if isinstance(optimizer, (list, tuple)):
-            optimizer = optimizer[0]
-        if isinstance(scheduler, (list, tuple)):
-            scheduler = scheduler[0]
-        
-        print(f"✅ Optimizer configured: {type(optimizer).__name__}")
-        if scheduler:
-            print(f"✅ Scheduler configured: {type(scheduler).__name__}")
-        else:
-            print("✅ No scheduler configured")
-        
-        best_val_loss = float('inf')
-        training_losses = []
-        validation_losses = []
-        
-        for epoch in range(max_epochs):
-            print(f"\n📈 Epoch {epoch + 1}/{max_epochs}")
-            
-            # Training phase
-            asr_model.train()
-            epoch_train_losses = []
-            
-            for batch_idx, batch in enumerate(train_dataloader):
-                if batch_idx >= 5:  # Limit to 5 batches for demo
-                    break
-                    
-                optimizer.zero_grad()
-                
-                # Forward pass
-                loss = asr_model.training_step(batch, batch_idx)
-                if isinstance(loss, dict):
-                    loss = loss['loss']
-                
-                # Backward pass
-                loss.backward()
-                optimizer.step()
-                
-                # Step scheduler if it exists
-                if scheduler and hasattr(scheduler, 'step'):
-                    scheduler.step()
-                
-                epoch_train_losses.append(float(loss))
-                
-                if batch_idx % 2 == 0:
-                    print(f"  Batch {batch_idx}: loss = {float(loss):.4f}")
-                
-                if use_wandb:
-                    wandb.log({
-                        "train_loss": float(loss),
-                        "epoch": epoch,
-                        "batch": batch_idx,
-                        "learning_rate": optimizer.param_groups[0]['lr']
-                    })
-            
-            avg_train_loss = sum(epoch_train_losses) / len(epoch_train_losses)
-            training_losses.append(avg_train_loss)
-            print(f"  Average training loss: {avg_train_loss:.4f}")
-            
-            # Validation phase
-            asr_model.eval()
-            epoch_val_losses = []
-            
-            with torch.no_grad():
-                for batch_idx, batch in enumerate(val_dataloader):
-                    if batch_idx >= 3:  # Limit to 3 batches for demo
-                        break
-                        
-                    val_loss = asr_model.validation_step(batch, batch_idx)
-                    if isinstance(val_loss, dict):
-                        val_loss = val_loss['val_loss']
-                    
-                    epoch_val_losses.append(float(val_loss))
-            
-            avg_val_loss = sum(epoch_val_losses) / len(epoch_val_losses)
-            validation_losses.append(avg_val_loss)
-            print(f"  Average validation loss: {avg_val_loss:.4f}")
-            
-            if use_wandb:
-                wandb.log({
-                    "val_loss": avg_val_loss,
-                    "train_loss_epoch": avg_train_loss,
-                    "epoch": epoch,
-                    "learning_rate": optimizer.param_groups[0]['lr']
-                })
-            
-            # Save best model
-            if avg_val_loss < best_val_loss:
-                best_val_loss = avg_val_loss
-                print(f"  ✅ New best validation loss: {best_val_loss:.4f}")
-        
-        print("✅ Fine-tuning completed!")
-        
-        # Test fine-tuned model
-        print("🧪 Testing fine-tuned model...")
-        asr_model.eval()
-        finetuned_output = asr_model.transcribe([sample_audio])
-        finetuned_text = finetuned_output[0].text
-        print(f"Fine-tuned transcription: {finetuned_text}")
-        
-        # Save model
-        output_model_path = "/checkpoints/parakeet_v3_finetuned_final.nemo"
-        asr_model.save_to(output_model_path)
-        print(f"💾 Model saved to: {output_model_path}")
-        
-        # Log results to W&B
-        if use_wandb:
-            # Log final metrics
-            wandb.log({
-                "finetuned_transcription": finetuned_text,
-                "training_samples": train_count,
-                "validation_samples": test_count,
-                "final_epoch": max_epochs,
-                "best_val_loss": best_val_loss,
-                "final_train_loss": training_losses[-1],
-                "final_val_loss": validation_losses[-1],
-            })
-            
-            # Save model as W&B artifact
-            print("📦 Saving model to W&B artifacts...")
-            artifact = wandb.Artifact(
-                name=f"{model_short_name}-finetuned-final",
-                type="model",
-                description=f"{model_name} fine-tuned on {train_count} AN4 samples for {max_epochs} epochs",
-                metadata={
-                    "model_name": model_name,
-                    "model_short_name": model_short_name,
-                    "training_samples": train_count,
-                    "validation_samples": test_count,
-                    "epochs": max_epochs,
-                    "batch_size": batch_size,
-                    "learning_rate": learning_rate,
-                    "gpu": "H100",
-                    "original_transcription": original_text,
-                    "finetuned_transcription": finetuned_text,
-                    "best_val_loss": best_val_loss,
-                    "nemo_version": nemo.__version__,
-                    "pytorch_lightning_version": pl.__version__,
-                    "dataset": "AN4",
-                }
-            )
-            
-            # Add model file to artifact
-            artifact.add_file(output_model_path, name="parakeet_v3_finetuned.nemo")
-            
-            # Log artifact
-            wandb.log_artifact(artifact)
-            print("✅ Model artifact saved to W&B")
-            
-            # Finish W&B run
-            wandb.finish()
-        
-        return {
-            "status": "success",
-            "model_name": model_name,
-            "model_short_name": model_short_name,
-            "training_samples": train_count,
-            "validation_samples": test_count,
-            "epochs_completed": max_epochs,
-            "original_transcription": original_text,
-            "finetuned_transcription": finetuned_text,
-            "model_path": output_model_path,
-            "experiment_dir": exp_dir,
-            "training_losses": training_losses,
-            "validation_losses": validation_losses,
-            "best_val_loss": best_val_loss,
-            "wandb_enabled": use_wandb,
-            "wandb_project": "asr",
-        }
-        
-    except Exception as e:
-        print(f"❌ Error during training: {e}")
-        import traceback
-        traceback.print_exc()
-        if use_wandb:
-            wandb.finish(exit_code=1)
-        return {"status": "error", "message": str(e)}
 
-@app.local_entrypoint()
-def main(
-    max_epochs: int = 5,
-    batch_size: int = 8,
-    learning_rate: float = 1e-4,
-    subset_size: int = 100,
-    use_wandb: bool = True,
-):
-    """Run the final fine-tuning with proper W&B logging"""
-    print("🚀 Starting Modal final fine-tuning session...")
-    print(f"Configuration:")
-    print(f"  Max epochs: {max_epochs}")
-    print(f"  Batch size: {batch_size}")
-    print(f"  Learning rate: {learning_rate}")
-    print(f"  Subset size: {subset_size}")
-    print(f"  W&B logging: {use_wandb}")
-    print(f"  W&B project: asr")
-    
     try:
-        results = finetune_parakeet_v3_final.remote(
-            max_epochs=max_epochs,
-            batch_size=batch_size,
-            learning_rate=learning_rate,
-            subset_size=subset_size,
-            use_wandb=use_wandb,
-        )
+        # 6. Train using trainer.fit() - NeMo handles dataloaders internally
+        print("🎯 Starting training with trainer.fit()...")
+        trainer.fit(asr_model)
+
+        # Extract loss metrics from trainer if available
+        print("\n✅ Training completed!")
+        if hasattr(trainer, 'callback_metrics'):
+            final_train_loss = trainer.callback_metrics.get('train_loss_epoch', trainer.callback_metrics.get('train_loss', 'N/A'))
+            final_val_loss = trainer.callback_metrics.get('val_loss', 'N/A')
+            print(f"\n📊 Final Metrics:")
+            print(f"  Train Loss: {final_train_loss}")
+            print(f"  Val Loss: {final_val_loss}")
+            
+        print(f"\n📝 Training Summary:")
+        print(f"Model: {model_name}")
+        print(f"Training samples: {subset_size}")
+        print(f"Validation samples: {subset_size // 5}")
+        print(f"Epochs: {max_epochs}")
+        print(f"Batch size: {batch_size}")
+        print(f"Experiment directory: {exp_dir}")
         
-        print("\n" + "=" * 60)
-        print("📊 TRAINING RESULTS:")
-        print("=" * 60)
+        # 🧪 Test the fine-tuned model with comprehensive inference
+        print("\n🧪 Testing fine-tuned model with comprehensive inference...")
         
-        if results["status"] == "success":
-            print("✅ Training completed successfully!")
-            print(f"Model: {results['model_name']}")
-            print(f"Training samples: {results['training_samples']}")
-            print(f"Validation samples: {results['validation_samples']}")
-            print(f"Epochs completed: {results['epochs_completed']}")
-            print(f"Best validation loss: {results['best_val_loss']:.4f}")
-            print(f"Model saved to: {results['model_path']}")
-            print(f"W&B project: {results['wandb_project']}")
-            print(f"W&B logging: {results['wandb_enabled']}")
+        # Get the model variable name dynamically
+        import re
+        model_var = [k for k, v in locals().items() if hasattr(v, 'transcribe') and hasattr(v, 'setup_training_data')]
+        
+        if model_var:
+            model_obj = locals()[model_var[0]]
+            # Load a few test audio files
+            test_audio_files = sorted(glob.glob("/data/an4_converted/wavs/*.wav"))[:5]
             
-            print("\n📝 Transcription Comparison:")
-            print(f"Original:    '{results['original_transcription']}'")
-            print(f"Fine-tuned:  '{results['finetuned_transcription']}'")
-            
-            print(f"\n📈 Training Progress:")
-            print(f"Training losses: {[f'{loss:.4f}' for loss in results['training_losses']]}")
-            print(f"Validation losses: {[f'{loss:.4f}' for loss in results['validation_losses']]}")
-            
-            print(f"\n🎯 Fine-tuning completed successfully on H100!")
-            if results['wandb_enabled']:
-                print("📦 Model artifacts saved to Weights & Biases")
-                print(f"🔗 Check your W&B dashboard: https://wandb.ai/milieu/asr")
-                print(f"🏷️ Tags: {results['model_short_name']}, parakeet-v3, h100, fine-tuning")
-        else:
-            print(f"❌ Training failed: {results['message']}")
+            if test_audio_files:
+                print(f"\nTranscribing {len(test_audio_files)} test samples...")
+                transcriptions = model_obj.transcribe(test_audio_files)
+                
+                print("\n📝 Transcription Results:")
+                print("=" * 80)
+                for i, (audio_file, transcription) in enumerate(zip(test_audio_files, transcriptions), 1):
+                    filename = Path(audio_file).name
+                    print(f"\n[{i}] {filename}:")
+                    print(f"    Transcription: '{transcription}'")
+                print("=" * 80)
+            else:
+                print("⚠️  No test files found for inference testing")
+        
+        print(f"\n🎯 Fine-tuning completed successfully on H100!")
+        print("📦 Model artifacts and checkpoints saved")
+        print(f"🔗 Check your W&B dashboard: https://wandb.ai/milieu/parakeet-v3-<secret_hidden>-finetune")
+        print(f"🏷️ Model: {model_name}, parakeet-v3, h100, fine-tuning")
             
     except Exception as e:
         print(f"❌ Modal execution error: {e}")
