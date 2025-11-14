@@ -377,7 +377,7 @@ model:
         if model_var:
             model_obj = locals()[model_var[0]]
             # Load a few test audio files
-            test_audio_files = sorted(glob.glob("/tmp/an4_test/*.wav"))[:5]
+            test_audio_files = sorted(glob.glob("/data/an4_converted/wavs/*.wav"))[:5]
             
             if test_audio_files:
                 print(f"\nTranscribing {len(test_audio_files)} test samples...")
