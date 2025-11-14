@@ -34,20 +34,66 @@ pip install -r requirements.txt
 
 ### 2. Modal GPU Training (Recommended)
 
+#### Authentication Setup
+
 ```bash
-# Install and setup Modal
+# Install Modal
 pip install modal
-python -m modal setup
 
-# Set up W&B credentials  
-modal secret create wandb-secret WANDB_API_KEY=your_key_here
+# Set up Modal authentication with your tokens
+modal token set --token-id <your-token-id> --token-secret <your-token-secret> --profile=<your-profile>
 
+# Activate the profile
+modal profile activate <your-profile>
+
+# Set up W&B credentials
+modal secret create wandb-secret WANDB_API_KEY=your_wandb_api_key
+```
+
+#### Running Training
+
+```bash
 # Run debugging test first
 modal run modal_debug_minimal.py
 
 # Run full training on H100
 modal run modal_parakeet_final.py --max-epochs 5 --batch-size 8 --subset-size 100
 ```
+
+#### Monitoring Training Logs
+
+Modal streams logs in real-time, but here's how to ensure you see everything:
+
+**Option 1: Using `modal run` (Default)**
+When you use `modal run`, logs stream automatically to your terminal. The training output, including loss values and progress, will appear in real-time.
+
+**Option 2: Using Python driver with `modal.enable_output()`**
+If you're running Modal from a Python script instead of the CLI:
+
+```python
+import modal
+
+with modal.enable_output():  # This enables log streaming
+    with app.run():
+        train.remote()
+```
+
+**Option 3: Monitoring detached/running jobs**
+To view logs of already-running jobs:
+
+```bash
+# List running apps
+modal app list
+
+# Stream logs from a specific app
+modal app logs <app-name-or-id>
+
+# Or by container
+modal container list
+modal container logs <container-id>
+```
+
+**Pro tip**: Modal's `app logs` and `container logs` commands stream in real-time, so you can monitor training progress even if you detached from the original session.
 
 ### 3. Jupyter Notebook Development
 
@@ -169,3 +215,67 @@ Tags include: `parakeet-v3`, `nvidia/parakeet-tdt-0.6b-v3`, `h100`, `fine-tuning
 ## 📄 License
 
 MIT License - see LICENSE file for details.
+## 🎓 NeMo 2.0+ Training Patterns (CRITICAL)
+
+### Understanding NeMo 2.0 Architecture Changes
+
+NeMo 2.0+ introduced significant API changes from version 1.x. The training workflow follows a specific order that must be respected for successful training.
+
+### Correct Training Pattern (Based on Official NeMo Examples)
+
+The order of operations is **critical** in NeMo 2.0+:
+
+```python
+# 1. Create PyTorch Lightning Trainer FIRST
+trainer = pl.Trainer(**cfg.trainer)
+
+# 2. Setup Experiment Manager BEFORE touching the model
+exp_manager(trainer, cfg.exp_manager)
+
+# 3. Load or create the model
+<secret_hidden>_model = ASRModel.from_pretrained(model_name="nvidia/parakeet-tdt-0.6b-v3")
+
+# 4. Attach trainer to model (NeMo-specific pattern)
+<secret_hidden>_model.set_trainer(trainer)
+
+# 5. Setup dataloaders (uses model methods)
+<secret_hidden>_model.setup_training_data(cfg.model.train_ds)
+<secret_hidden>_model.setup_validation_data(cfg.model.validation_ds)
+
+# 6. Setup optimization
+<secret_hidden>_model.setup_optimization(cfg.model.optim)
+
+# 7. Train - NeMo handles dataloaders internally
+trainer.fit(<secret_hidden>_model)
+```
+
+### ❌ Common Pitfalls
+
+1. **Wrong**: Calling `model.set_trainer()` after `setup_training_data()`
+   - **Right**: Call `set_trainer()` BEFORE setting up data
+
+2. **Wrong**: Passing dataloaders explicitly to `trainer.fit(model, train_dl, val_dl)`
+   - **Right**: Call `trainer.fit(model)` - NeMo accesses dataloaders via model attributes
+
+3. **Wrong**: Setting up exp_manager after model operations
+   - **Right**: Call `exp_manager(trainer, cfg)` immediately after creating trainer
+
+4. **Wrong**: Using `model.cfg.optim = ...` without `setup_optimization()`
+   - **Right**: Call `model.setup_optimization(cfg.model.optim)` explicitly
+
+### Key Insights from Official NeMo Code
+
+These patterns are derived from the official [NeMo speech_to_text_finetune.py](https://github.com/NVIDIA/NeMo/blob/main/examples/<secret_hidden>/speech_to_text_finetune.py):
+
+- NeMo models inherit from `LightningModule` but require special initialization
+- The `set_trainer()` method properly connects model callbacks and logging
+- Data setup methods (`setup_training_data`, `setup_validation_data`) configure internal dataloader attributes
+- The `setup_optimization()` method properly initializes optimizers and learning rate schedulers
+- `exp_manager()` sets up checkpointing, logging, and experiment directories
+
+### Resources
+
+- [NeMo 2.0 Fundamentals Notebook](https://colab.research.google.com/github/NVIDIA/NeMo/blob/stable/tutorials/00_NeMo_Primer.ipynb)
+- [NeMo ASR Training Tutorials](https://docs.nvidia.com/nemo-framework/user-guide/latest/playbooks/index.html#automatic-speech-recognition-<secret_hidden>-tutorials)
+- [Official NeMo GitHub Repository](https://github.com/NVIDIA/NeMo)
+
