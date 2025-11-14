@@ -1,248 +1,171 @@
-# Parakeet-v3 Fine-tuning with NeMo 2.5+
+# ASR Fine-tuning with Parakeet-v3 and NeMo 2.5+
 
-This repository contains updated code for fine-tuning the NVIDIA Parakeet-v3 ASR model using NeMo 2.5+, adapted from the original NVIDIA Riva tutorial that used NeMo 1.23.
+This repository contains updated code for fine-tuning NVIDIA's Parakeet-v3 ASR model using NeMo 2.5+ (updated from the original NeMo 1.23 tutorial).
 
-## 🚀 Key Updates from Original Tutorial
+## 🎯 Overview
 
-### Model Changes
-- **Updated Model**: Uses `nvidia/parakeet-tdt-0.6b-v3` instead of the original Parakeet model
-- **Architecture**: FastConformer-TDT with 600M parameters
-- **Languages**: Supports 25 European languages with automatic language detection
-- **License**: CC BY 4.0 (commercial/non-commercial use allowed)
+The original NVIDIA Riva tutorial used NeMo 1.23 and the original Parakeet model. This repository provides:
 
-### NeMo Version Changes (1.23 → 2.5+)
-- **API Updates**: Updated import statements and configuration structure
-- **Configuration**: Uses OmegaConf for configuration management
-- **Training Setup**: Simplified trainer and experiment manager setup
-- **Model Loading**: Direct loading from HuggingFace Hub
-- **Logging**: Integrated Weights & Biases support
+- **✅ Updated NeMo version**: From 1.23 to 2.5.3
+- **✅ Updated model**: From original Parakeet to `nvidia/parakeet-tdt-0.6b-v3` (627M parameters)
+- **✅ Modal GPU support**: Training on H100/H200/A100 GPUs via Modal
+- **✅ Weights & Biases integration**: Experiment tracking and model artifacts to "asr" project
+- **✅ Fast subset training**: Quick experimentation with AN4 dataset
 
-## 📁 Files Overview
+## 📁 Files
 
 ### Core Files
-- `parakeet_v3_finetune_nemo2.ipynb` - Complete Jupyter notebook with step-by-step tutorial
-- `parakeet_v3_finetune_simple.py` - Standalone Python script for local testing
-- `modal_parakeet_finetune.py` - Modal GPU infrastructure script for cloud training
+- **`parakeet_v3_finetune_nemo2.ipynb`** - Complete Jupyter notebook with fine-tuning pipeline
+- **`modal_parakeet_final.py`** - Modal script for H100 GPU training with W&B logging
+- **`requirements.txt`** - Complete dependency list
 
-### Key Features
-- ✅ **NeMo 2.5+ Compatibility**: Updated for latest NeMo version
-- ✅ **Parakeet-v3 Model**: Uses the latest multilingual model
-- ✅ **Modal GPU Support**: Cloud training on H100/H200 GPUs
-- ✅ **Weights & Biases Integration**: Experiment tracking and logging
-- ✅ **Comprehensive Error Handling**: Robust data processing and training
-- ✅ **Production Ready**: Includes model export and evaluation
-
-## 🛠️ Installation
-
-### Local Setup
-```bash
-# Install system dependencies
-sudo apt-get update && apt-get install -y sox libsndfile1 ffmpeg libsox-fmt-mp3 jq wget
-
-# Install Python dependencies
-pip install nemo_toolkit[asr]>=2.5.0
-pip install text-unidecode matplotlib>=3.3.2 librosa soundfile
-pip install huggingface-hub>=0.23.2 omegaconf pytorch-lightning
-pip install wandb  # Optional for experiment tracking
-```
-
-### Modal Setup (for GPU training)
-```bash
-# Install Modal
-pip install modal
-
-# Set up Modal token (replace with your credentials)
-modal token set --token-id YOUR_TOKEN_ID --token-secret YOUR_TOKEN_SECRET
-
-# Create environment
-modal environment create asr
-```
+### Debugging & Development  
+- **`modal_debug_minimal.py`** - Debugging script to test model loading and functionality
+- **`README.md`** - This documentation
+- **`LICENSE`** - MIT License
 
 ## 🚀 Quick Start
 
-### 1. Local Testing
+### 1. Install Dependencies
+
 ```bash
-# Run simple fine-tuning script
-python parakeet_v3_finetune_simple.py
+pip install -r requirements.txt
 ```
 
-### 2. Jupyter Notebook
+### 2. Modal GPU Training (Recommended)
+
 ```bash
-# Start Jupyter and open the notebook
+# Install and setup Modal
+pip install modal
+python -m modal setup
+
+# Set up W&B credentials  
+modal secret create wandb-secret WANDB_API_KEY=your_key_here
+
+# Run debugging test first
+modal run modal_debug_minimal.py
+
+# Run full training on H100
+modal run modal_parakeet_final.py --max-epochs 5 --batch-size 8 --subset-size 100
+```
+
+### 3. Jupyter Notebook Development
+
+```bash
 jupyter notebook parakeet_v3_finetune_nemo2.ipynb
 ```
 
-### 3. Modal GPU Training
-```bash
-# Run on Modal with Weights & Biases logging
-MODAL_ENVIRONMENT=asr modal run modal_parakeet_finetune.py --max-epochs 5 --batch-size 8 --use-wandb
-```
+## 🔧 Key Changes from Original Tutorial
 
-## 📊 Model Performance
+### NeMo API Updates (1.23 → 2.5.3)
+- ✅ Updated model loading: `ASRModel.from_pretrained()`
+- ✅ New configuration structure with OmegaConf  
+- ✅ Updated trainer setup and data loading
+- ✅ Compatible PyTorch Lightning version (2.4.0)
 
-### Parakeet-v3 Features
-- **Automatic Punctuation & Capitalization**: No post-processing needed
-- **Word-level Timestamps**: Precise timing information
-- **Long Audio Support**: Up to 24 minutes with full attention
-- **Multilingual**: 25 European languages supported
-- **High Accuracy**: State-of-the-art performance on benchmarks
+### Model Updates
+- **Original**: `nvidia/parakeet-rnnt-1.1b` 
+- **New**: `nvidia/parakeet-tdt-0.6b-v3` (627M parameters)
+- ✅ TDT (Token-and-Duration Transducer) architecture
+- ✅ Better performance and efficiency
 
-### Training Configuration
-- **Learning Rate**: 1e-4 (lower for fine-tuning)
-- **Batch Size**: 4-8 (adjustable based on GPU memory)
-- **Precision**: bf16-mixed for faster training
-- **Optimizer**: AdamW with cosine annealing scheduler
+### Infrastructure
+- ✅ **Modal GPU support**: H100, H200, A100 training
+- ✅ **W&B integration**: Logs to "asr" project with model name tags
+- ✅ **Containerized training**: Reproducible environments
+- ✅ **Fast subset training**: 100 samples for quick experimentation
 
-## 🔧 Configuration Options
+## 🤖 Model Details
 
-### Training Parameters
-```python
-# Basic configuration
-max_epochs = 10          # Number of training epochs
-batch_size = 8           # Training batch size
-learning_rate = 1e-4     # Learning rate for fine-tuning
-use_wandb = True         # Enable Weights & Biases logging
+**Parakeet-v3 (nvidia/parakeet-tdt-0.6b-v3)**
+- **Parameters**: 627,008,134 (627M)
+- **Architecture**: Token-and-Duration Transducer (TDT)
+- **Sample Rate**: 16kHz
+- **Tokenizer**: SentencePiece (8192 tokens)
+- **Loss**: TDT with configurable durations
 
-# Advanced configuration
-precision = 'bf16-mixed' # Mixed precision training
-gradient_clip_val = 1.0  # Gradient clipping
-val_check_interval = 1.0 # Validation frequency
-```
+## ⚙️ Training Configuration
 
-### Model Configuration
-```python
-# Data configuration
-train_ds:
-  manifest_filepath: "path/to/train_manifest.json"
-  batch_size: 8
-  shuffle: true
-  num_workers: 4
+### Default Settings
+- **Epochs**: 5
+- **Batch Size**: 8  
+- **Learning Rate**: 1e-4
+- **Optimizer**: AdamW with weight decay
+- **Scheduler**: Cosine Annealing with warmup
+- **Precision**: BF16 mixed precision
+- **Dataset**: AN4 (100 samples for fast training)
 
-validation_ds:
-  manifest_filepath: "path/to/val_manifest.json"
-  batch_size: 8
-  shuffle: false
-  num_workers: 4
+### W&B Logging
+- **Project**: `asr` (always)
+- **Tags**: `parakeet-v3`, `nvidia/parakeet-tdt-0.6b-v3`, `h100`, `fine-tuning`
+- **Metrics**: Training/validation loss, learning rate
+- **Artifacts**: Fine-tuned model with metadata
 
-# Optimizer configuration
-optim:
-  name: "adamw"
-  lr: 1e-4
-  weight_decay: 0.001
-  sched:
-    name: "CosineAnnealing"
-    warmup_steps: 100
-    min_lr: 1e-6
-```
+## 💻 Hardware Requirements
 
-## 📈 Weights & Biases Integration
+### Modal GPU Training (Recommended)
+- **H100/H200/A100** GPU via Modal
+- **40GB+** GPU memory for full model
+- Fast internet for dataset download
 
-The Modal script includes full W&B integration for experiment tracking:
+### Local Development
+- **8GB RAM** minimum
+- **Python 3.8+**
+- CPU-only for debugging
 
-```bash
-# Set environment variables
-export WANDB_API_KEY="your_api_key"
-export WANDB_PROJECT="asr"
-export WANDB_ENTITY="your_entity"
-
-# Run with logging
-modal run modal_parakeet_finetune.py --use-wandb
-```
-
-### Logged Metrics
-- Training/Validation Loss
-- Word Error Rate (WER)
-- Learning Rate Schedule
-- GPU Utilization
-- Training Time per Epoch
-- Model Transcription Examples
-
-## 🎯 Use Cases
-
-### Ideal For
-- **Domain Adaptation**: Adapt to specific vocabulary or speaking styles
-- **Language Variants**: Fine-tune for specific regional accents
-- **Noisy Environments**: Improve performance on specific audio conditions
-- **Custom Vocabulary**: Add domain-specific terms and phrases
-
-### Example Domains
-- Medical transcription
-- Legal documentation
-- Technical presentations
-- Customer service calls
-- Educational content
-
-## 🔍 Troubleshooting
+## 🐛 Troubleshooting
 
 ### Common Issues
 
-#### 1. CUDA Out of Memory
-```bash
-# Reduce batch size
---batch-size 4
+1. **PyTorch Lightning compatibility**
+   ```bash
+   # Use exact versions
+   pip install pytorch-lightning==2.4.0 nemo_toolkit[asr]==2.5.3
+   ```
 
-# Use gradient accumulation
---accumulate-grad-batches 2
-```
+2. **Model loading errors**
+   - Ensure internet connection for HuggingFace downloads
+   - Check CUDA availability: `torch.cuda.is_available()`
 
-#### 2. Manifest File Errors
-- Ensure audio files exist at specified paths
-- Check JSON format (one object per line)
-- Verify duration calculations are correct
+3. **Memory issues**
+   - Reduce `--batch-size` for smaller GPUs
+   - Use gradient accumulation for effective larger batches
 
-#### 3. Model Loading Issues
-```python
-# Clear cache if needed
-import torch
-torch.cuda.empty_cache()
+4. **Modal setup**
+   ```bash
+   modal setup  # For authentication
+   modal secret create wandb-secret WANDB_API_KEY=your_key
+   ```
 
-# Verify model name
-model_name = "nvidia/parakeet-tdt-0.6b-v3"
-```
+## 📊 Results
 
-#### 4. Training Convergence
-- Lower learning rate for better stability
-- Increase warmup steps for large datasets
-- Monitor validation metrics for overfitting
+### Training Progress
+The training logs show:
+- ✅ Model loading: 627M parameters
+- ✅ Dataset preparation: AN4 conversion and manifest creation
+- ✅ W&B logging: Proper project and tagging
+- ✅ GPU utilization: H100 with BF16 mixed precision
 
-## 📚 Additional Resources
+### W&B Dashboard
+Check your results at: `https://wandb.ai/milieu/asr`
 
-### Documentation
-- [NeMo ASR Documentation](https://docs.nvidia.com/nemo-framework/user-guide/latest/nemotoolkit/asr/intro.html)
-- [Parakeet-v3 Model Card](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
+Tags include: `parakeet-v3`, `nvidia/parakeet-tdt-0.6b-v3`, `h100`, `fine-tuning`
+
+## 🔄 Development Workflow
+
+1. **Debug first**: `modal run modal_debug_minimal.py`
+2. **Develop interactively**: Use Jupyter notebook
+3. **Train on GPU**: `modal run modal_parakeet_final.py`
+4. **Monitor progress**: Check W&B dashboard
+5. **Download artifacts**: Fine-tuned model from W&B
+
+## 📚 References
+
+- [Original NVIDIA Riva Tutorial](https://docs.nvidia.com/deeplearning/riva/user-guide/docs/tutorials/asr-finetune-parakeet-nemo.html)
+- [NeMo 2.5+ Documentation](https://docs.nvidia.com/deeplearning/nemo/user-guide/docs/en/stable/)
+- [Parakeet-v3 Model](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
 - [Modal Documentation](https://modal.com/docs)
-
-### Research Papers
-- [FastConformer: Local Augmentation for Efficient Conformer](https://arxiv.org/abs/2305.05084)
-- [TDT: Token-level Direct Transducer](https://arxiv.org/abs/2304.01556)
-- [Parakeet Technical Report](https://arxiv.org/abs/2509.14128)
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit issues, feature requests, or pull requests.
-
-### Development Setup
-```bash
-# Clone repository
-git clone https://github.com/your-username/asr.git
-cd asr
-
-# Install development dependencies
-pip install -e .
-pip install pytest black flake8
-```
 
 ## 📄 License
 
-This project is licensed under the MIT License. The Parakeet-v3 model is licensed under CC BY 4.0.
-
-## 🙏 Acknowledgments
-
-- NVIDIA NeMo Team for the excellent framework
-- NVIDIA Riva Team for the original tutorial
-- Modal Labs for GPU infrastructure
-- Weights & Biases for experiment tracking
-
----
-
-**Note**: This is an updated version of the original NVIDIA Riva ASR fine-tuning tutorial, adapted for NeMo 2.5+ and the Parakeet-v3 model. The original tutorial can be found in the [NVIDIA Riva documentation](https://docs.nvidia.com/deeplearning/riva/user-guide/docs/tutorials/asr-finetune-parakeet-nemo.html).
+MIT License - see LICENSE file for details.
